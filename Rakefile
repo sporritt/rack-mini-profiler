@@ -1,6 +1,8 @@
 # Rakefile
 require 'rubygems'
 require 'bundler'
+require 'bundler/gem_tasks'
+
 Bundler.setup(:default, :test)
 
 task :default => [:spec]
@@ -28,11 +30,11 @@ task :update_asset_version => :compile_less do
   Dir.glob('lib/html/*.{js,html,css,tmpl}').each do |f|
     h << Digest::MD5.hexdigest(::File.read(f))
   end
-  File.open('lib/mini_profiler/version.rb','w') do |f|
+  File.open('lib/mini_profiler/asset_version.rb','w') do |f|
     f.write \
 "module Rack
   class MiniProfiler
-    VERSION = '#{Digest::MD5.hexdigest(h.sort.join(''))}'.freeze
+    ASSET_VERSION = '#{Digest::MD5.hexdigest(h.sort.join(''))}'.freeze
   end
 end"
   end

@@ -1,30 +1,5 @@
-require 'json'
-require 'timeout'
-require 'thread'
-
-require 'mini_profiler/version'
-require 'mini_profiler/page_timer_struct'
-require 'mini_profiler/sql_timer_struct'
-require 'mini_profiler/custom_timer_struct'
-require 'mini_profiler/client_timer_struct'
-require 'mini_profiler/request_timer_struct'
-require 'mini_profiler/storage/abstract_store'
-require 'mini_profiler/storage/memcache_store'
-require 'mini_profiler/storage/memory_store'
-require 'mini_profiler/storage/redis_store'
-require 'mini_profiler/storage/file_store'
-require 'mini_profiler/config'
-require 'mini_profiler/profiling_methods'
-require 'mini_profiler/context'
-require 'mini_profiler/client_settings'
-require 'mini_profiler/gc_profiler'
-# TODO
-# require 'mini_profiler/gc_profiler_ruby_head' if Gem::Version.new('2.1.0') <= Gem::Version.new(RUBY_VERSION)
-
 module Rack
-
   class MiniProfiler
-
     class << self
 
       include Rack::MiniProfiler::ProfilingMethods
@@ -43,8 +18,7 @@ module Rack
       end
 
       def share_template
-        return @share_template unless @share_template.nil?
-        @share_template = ::File.read(::File.expand_path("../html/share.html", ::File.dirname(__FILE__)))
+        @share_template ||= ::File.read(::File.expand_path("../html/share.html", ::File.dirname(__FILE__)))
       end
 
       def current
@@ -53,7 +27,7 @@ module Rack
 
       def current=(c)
         # we use TLS cause we need access to this from sql blocks and code blocks that have no access to env
-        Thread.current[:mini_profiler_private]= c
+        Thread.current[:mini_profiler_private] = c
       end
 
       # discard existing results, don't track this request
@@ -63,10 +37,10 @@ module Rack
 
       def create_current(env={}, options={})
         # profiling the request
-        self.current = Context.new
-        self.current.inject_js = config.auto_inject && (!env['HTTP_X_REQUESTED_WITH'].eql? 'XMLHttpRequest')
-        self.current.page_struct = PageTimerStruct.new(env)
-        self.current.current_timer = current.page_struct['Root']
+        self.current               = Context.new
+        self.current.inject_js     = config.auto_inject && (!env['HTTP_X_REQUESTED_WITH'].eql? 'XMLHttpRequest')
+        self.current.page_struct   = TimerStruct::Page.new(env)
+        self.current.current_timer = current.page_struct[:root]
       end
 
       def authorize_request
@@ -89,7 +63,7 @@ module Rack
     def initialize(app, config = nil)
       MiniProfiler.config.merge!(config)
       @config = MiniProfiler.config
-      @app = app
+      @app    = app
       @config.base_url_path << "/" unless @config.base_url_path.end_with? "/"
       unless @config.storage_instance
         @config.storage_instance = @config.storage.new(@config.storage_options)
@@ -102,18 +76,18 @@ module Rack
     end
 
     def serve_results(env)
-      request = Rack::Request.new(env)
-      id = request['id']
+      request     = Rack::Request.new(env)
+      id          = request[:id]
       page_struct = @storage.load(id)
       unless page_struct
         @storage.set_viewed(user(env), id)
-        id = ERB::Util.html_escape(request['id'])
+        id        = ERB::Util.html_escape(request['id'])
         user_info = ERB::Util.html_escape(user(env))
         return [404, {}, ["Request not found: #{id} - user #{user_info}"]]
       end
-      unless page_struct['HasUserViewed']
-        page_struct['ClientTimings'] = ClientTimerStruct.init_from_form_data(env, page_struct)
-        page_struct['HasUserViewed'] = true
+      unless page_struct[:has_user_viewed]
+        page_struct[:client_timings]  = TimerStruct::Client.init_from_form_data(env, page_struct)
+        page_struct[:has_user_viewed] = true
         @storage.save(page_struct)
         @storage.set_viewed(user(env), id)
       end
@@ -126,11 +100,11 @@ module Rack
 
         # Otherwise give the HTML back
         html = MiniProfiler.share_template.dup
-        html.gsub!(/\{path\}/, "#{env['SCRIPT_NAME']}#{@config.base_url_path}")
-        html.gsub!(/\{version\}/, MiniProfiler::VERSION)
+        html.gsub!(/\{path\}/, "#{env['RACK_MINI_PROFILER_ORIGINAL_SCRIPT_NAME']}#{@config.base_url_path}")
+        html.gsub!(/\{version\}/, MiniProfiler::ASSET_VERSION)
         html.gsub!(/\{json\}/, result_json)
         html.gsub!(/\{includes\}/, get_profile_script(env))
-        html.gsub!(/\{name\}/, page_struct['Name'])
+        html.gsub!(/\{name\}/, page_struct[:name])
         html.gsub!(/\{duration\}/, "%.1f" % page_struct.duration_ms)
 
         [200, {'Content-Type' => 'text/html'}, [html]]
@@ -145,7 +119,7 @@ module Rack
 
       full_path = ::File.expand_path("../html/#{file_name}", ::File.dirname(__FILE__))
       return [404, {}, ["Not found"]] unless ::File.exists? full_path
-      f = Rack::File.new nil
+      f      = Rack::File.new nil
       f.path = full_path
 
       begin
@@ -166,7 +140,7 @@ module Rack
     end
 
     def current=(c)
-      MiniProfiler.current=c
+      MiniProfiler.current = c
     end
 
 
@@ -181,10 +155,13 @@ module Rack
 
       status = headers = body = nil
       query_string = env['QUERY_STRING']
-      path = env['PATH_INFO']
+      path         = env['PATH_INFO']
+
+      # Someone (e.g. Rails engine) could change the SCRIPT_NAME so we save it
+      env['RACK_MINI_PROFILER_ORIGINAL_SCRIPT_NAME'] = env['SCRIPT_NAME']
 
       skip_it = (@config.pre_authorize_cb && !@config.pre_authorize_cb.call(env)) ||
-                (@config.skip_paths && @config.skip_paths.any?{ |p| path[0,p.length] == p}) ||
+                (@config.skip_paths && @config.skip_paths.any?{ |p| path.start_with?(p) }) ||
                 query_string =~ /pp=skip/
 
       has_profiling_cookie = client_settings.has_cookie?
@@ -222,20 +199,17 @@ module Rack
 
       if query_string =~ /pp=profile-gc/
         current.measure = false if current
+        return Rack::MiniProfiler::GCProfiler.new.profile_gc(@app, env)
+      end
 
-        if query_string =~ /pp=profile-gc-time/
-          return Rack::MiniProfiler::GCProfiler.new.profile_gc_time(@app, env)
-        elsif query_string =~ /pp=profile-gc-ruby-head/
-          result = StringIO.new
-          report = MemoryProfiler.report do
-            _,_,body = @app.call(env)
-            body.close if body.respond_to? :close
-          end
-          report.pretty_print(result)
-          return text_result(result.string)
-        else
-          return Rack::MiniProfiler::GCProfiler.new.profile_gc(@app, env)
+      if query_string =~ /pp=profile-memory/
+        result = StringIO.new
+        report = MemoryProfiler.report do
+          _,_,body = @app.call(env)
+          body.close if body.respond_to? :close
         end
+        report.pretty_print(result)
+        return text_result(result.string)
       end
 
       MiniProfiler.create_current(env, @config)
@@ -262,7 +236,7 @@ module Rack
 
       if trace_exceptions
         exceptions = []
-        trace = TracePoint.new(:raise) do |tp|
+        trace      = TracePoint.new(:raise) do |tp|
           exceptions << tp.raised_exception
         end
         trace.enable
@@ -274,7 +248,7 @@ module Rack
         #  This solves a very annoying bug where rack mini profiler never shows up
         if config.disable_caching
           env['HTTP_IF_MODIFIED_SINCE'] = ''
-          env['HTTP_IF_NONE_MATCH'] = ''
+          env['HTTP_IF_NONE_MATCH']     = ''
         end
 
         if query_string =~ /pp=flamegraph/
@@ -285,7 +259,7 @@ module Rack
           else
             # do not sully our profile with mini profiler timings
             current.measure = false
-            match_data = query_string.match(/flamegraph_sample_rate=([\d\.]+)/)
+            match_data      = query_string.match(/flamegraph_sample_rate=([\d\.]+)/)
 
             mode = query_string =~ /mode=c/ ? :c : :ruby
 
@@ -330,14 +304,19 @@ module Rack
         return dump_env env
       end
 
+      if query_string =~ /pp=analyze-memory/
+        body.close if body.respond_to? :close
+        return analyze_memory
+      end
+
       if query_string =~ /pp=help/
         body.close if body.respond_to? :close
-        return help(client_settings)
+        return help(client_settings, env)
       end
 
       page_struct = current.page_struct
-      page_struct['User'] = user(env)
-      page_struct['Root'].record_time((Time.now - start) * 1000)
+      page_struct[:user] = user(env)
+      page_struct[:root].record_time((Time.now - start) * 1000)
 
       if flamegraph
         body.close if body.respond_to? :close
@@ -347,7 +326,7 @@ module Rack
 
       begin
         # no matter what it is, it should be unviewed, otherwise we will miss POST
-        @storage.set_unviewed(page_struct['User'], page_struct['Id'])
+        @storage.set_unviewed(page_struct[:user], page_struct[:id])
         @storage.save(page_struct)
 
         # inject headers, script
@@ -389,7 +368,7 @@ module Rack
 
       if current.inject_js && content_type =~ /text\/html/
         response = Rack::Response.new([], status, headers)
-        script = self.get_profile_script(env)
+        script   = self.get_profile_script(env)
 
         if String === body
           response.write inject(body,script)
@@ -442,7 +421,7 @@ module Rack
 
     def dump_exceptions(exceptions)
       headers = {'Content-Type' => 'text/plain'}
-      body = "Exceptions (#{exceptions.length} raised during request)\n\n"
+      body    = "Exceptions (#{exceptions.length} raised during request)\n\n"
       exceptions.each do |e|
         body << "#{e.class} #{e.message}\n#{e.backtrace.join("\n")}\n\n\n\n"
       end
@@ -472,30 +451,112 @@ module Rack
       text_result(body)
     end
 
+    def trim_strings(strings, max_size)
+      strings.sort!{|a,b| b[1] <=> a[1]}
+      i = 0
+      strings.delete_if{|_| (i+=1) > max_size}
+    end
+
+    def analyze_memory
+      require 'objspace'
+
+      utf8 = "utf-8"
+
+      GC.start
+
+      trunc = lambda do |str|
+        str = str.length > 200 ? str : str[0..200]
+
+        if str.encoding != Encoding::UTF_8
+          str = str.dup
+          str.force_encoding(utf8)
+
+          unless str.valid_encoding?
+            # work around bust string with a double conversion
+            str.encode!("utf-16","utf-8",:invalid => :replace)
+            str.encode!("utf-8","utf-16")
+          end
+        end
+
+        str
+      end
+
+      body = "ObjectSpace stats:\n\n"
+
+      counts = ObjectSpace.count_objects
+      total_strings = counts[:T_STRING]
+
+      body << counts
+        .sort{|a,b| b[1] <=> a[1]}
+        .map{|k,v| "#{k}: #{v}"}
+        .join("\n")
+
+      strings = []
+      string_counts = Hash.new(0)
+      sample_strings = []
+
+      max_size = 1000
+      sample_every = total_strings / max_size
+
+      i = 0
+      ObjectSpace.each_object(String) do |str|
+        i += 1
+        string_counts[str] += 1
+        strings << [trunc.call(str), str.length]
+        sample_strings << [trunc.call(str), str.length] if i % sample_every == 0
+        if strings.length > max_size * 2
+          trim_strings(strings, max_size)
+        end
+      end
+
+      trim_strings(strings, max_size)
+
+      body << "\n\n\n1000 Largest strings:\n\n"
+      body << strings.map{|s,len| "#{s[0..1000]}\n(len: #{len})\n\n"}.join("\n")
+
+      body << "\n\n\n1000 Sample strings:\n\n"
+      body << sample_strings.map{|s,len| "#{s[0..1000]}\n(len: #{len})\n\n"}.join("\n")
+
+      body << "\n\n\n1000 Most common strings:\n\n"
+      body << string_counts.sort{|a,b| b[1] <=> a[1]}[0..max_size].map{|s,len| "#{trunc.call(s)}\n(x #{len})\n\n"}.join("\n")
+
+      text_result(body)
+    end
+
     def text_result(body)
       headers = {'Content-Type' => 'text/plain'}
       [200, headers, [body]]
     end
 
-    def help(client_settings)
-      headers = {'Content-Type' => 'text/plain'}
-      body = "Append the following to your query string:
+    def make_link(postfix, env)
+      link = env["PATH_INFO"] + "?" + env["QUERY_STRING"].sub("pp=help", "pp=#{postfix}")
+      "pp=<a href='#{link}'>#{postfix}</a>"
+    end
 
-  pp=help : display this screen
-  pp=env : display the rack environment
-  pp=skip : skip mini profiler for this request
-  pp=no-backtrace #{"(*) " if client_settings.backtrace_none?}: don't collect stack traces from all the SQL executed (sticky, use pp=normal-backtrace to enable)
-  pp=normal-backtrace #{"(*) " if client_settings.backtrace_default?}: collect stack traces from all the SQL executed and filter normally
-  pp=full-backtrace #{"(*) " if client_settings.backtrace_full?}: enable full backtraces for SQL executed (use pp=normal-backtrace to disable)
-  pp=disable : disable profiling for this session
-  pp=enable : enable profiling for this session (if previously disabled)
-  pp=profile-gc: perform gc profiling on this request, analyzes ObjectSpace generated by request (ruby 1.9.3 only)
-  pp=profile-gc-time: perform built-in gc profiling on this request (ruby 1.9.3 only)
-  pp=profile-gc-ruby-head: requires the memory_profiler gem, new location based report
-  pp=flamegraph: works best on Ruby 2.0, a graph representing sampled activity (requires the flamegraph gem).
-  pp=flamegraph&flamegraph_sample_rate=1: creates a flamegraph with the specified sample rate (in ms). Overrides value set in config
-  pp=flamegraph_embed: works best on Ruby 2.0, a graph representing sampled activity (requires the flamegraph gem), embedded resources for use on an intranet.
-  pp=trace-exceptions: requires Ruby 2.0, will return all the spots where your application raises execptions
+    def help(client_settings, env)
+      headers = {'Content-Type' => 'text/html'}
+      body = "<html><body>
+<pre style='line-height: 30px; font-size: 16px;'>
+Append the following to your query string:
+
+  #{make_link "help", env} : display this screen
+  #{make_link "env", env} : display the rack environment
+  #{make_link "skip", env} : skip mini profiler for this request
+  #{make_link "no-backtrace", env} #{"(*) " if client_settings.backtrace_none?}: don't collect stack traces from all the SQL executed (sticky, use pp=normal-backtrace to enable)
+  #{make_link "normal-backtrace", env} #{"(*) " if client_settings.backtrace_default?}: collect stack traces from all the SQL executed and filter normally
+  #{make_link "full-backtrace", env} #{"(*) " if client_settings.backtrace_full?}: enable full backtraces for SQL executed (use pp=normal-backtrace to disable)
+  #{make_link "disable", env} : disable profiling for this session
+  #{make_link "enable", env} : enable profiling for this session (if previously disabled)
+  #{make_link "profile-gc", env} : perform gc profiling on this request, analyzes ObjectSpace generated by request (ruby 1.9.3 only)
+  #{make_link "profile-memory", env} : requires the memory_profiler gem, new location based report
+  #{make_link "flamegraph", env} : works best on Ruby 2.0, a graph representing sampled activity (requires the flamegraph gem).
+  #{make_link "flamegraph&flamegraph_sample_rate=1", env}: creates a flamegraph with the specified sample rate (in ms). Overrides value set in config
+  #{make_link "flamegraph_embed", env} : works best on Ruby 2.0, a graph representing sampled activity (requires the flamegraph gem), embedded resources for use on an intranet.
+  #{make_link "trace-exceptions", env} : requires Ruby 2.0, will return all the spots where your application raises execptions
+  #{make_link "analyze-memory", env} : requires Ruby 2.0, will perform basic memory analysis of heap
+</pre>
+</body>
+</html>
 "
 
       client_settings.write!(headers)
@@ -509,7 +570,7 @@ module Rack
 
     def ids(env)
       # cap at 10 ids, otherwise there is a chance you can blow the header
-      ([current.page_struct["Id"]] + (@storage.get_unviewed_ids(user(env)) || [])[0..8]).uniq
+      ([current.page_struct[:id]] + (@storage.get_unviewed_ids(user(env)) || [])[0..8]).uniq
     end
 
     def ids_json(env)
@@ -527,25 +588,26 @@ module Rack
     # * you have disabled auto append behaviour throught :auto_inject => false flag
     # * you do not want script to be automatically appended for the current page. You can also call cancel_auto_inject
     def get_profile_script(env)
+      path     = "#{env['RACK_MINI_PROFILER_ORIGINAL_SCRIPT_NAME']}#{@config.base_url_path}"
 
       settings = {
-       :path => "#{env['SCRIPT_NAME']}#{@config.base_url_path}",
-       :version => MiniProfiler::VERSION,
-       :position => @config.position,
-       :showTrivial => false,
-       :showChildren => false,
+       :path            => path,
+       :version         => MiniProfiler::ASSET_VERSION,
+       :position        => @config.position,
+       :showTrivial     => false,
+       :showChildren    => false,
        :maxTracesToShow => 10,
-       :showControls => false,
-       :authorized => true,
-       :toggleShortcut => @config.toggle_shortcut,
-       :startHidden => @config.start_hidden
+       :showControls    => false,
+       :authorized      => true,
+       :toggleShortcut  => @config.toggle_shortcut,
+       :startHidden     => @config.start_hidden
       }
 
       if current && current.page_struct
-        settings[:ids] = ids_comma_separated(env)
-        settings[:currentId] = current.page_struct["Id"]
+        settings[:ids]       = ids_comma_separated(env)
+        settings[:currentId] = current.page_struct[:id]
       else
-        settings[:ids] = []
+        settings[:ids]       = []
         settings[:currentId] = ""
       end
 
@@ -567,6 +629,4 @@ module Rack
     end
 
   end
-
 end
-

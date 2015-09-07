@@ -1,6 +1,6 @@
 # rack-mini-profiler
 
-[![Code Climate](https://codeclimate.com/github/MiniProfiler/rack-mini-profiler.png)](https://codeclimate.com/github/MiniProfiler/rack-mini-profiler) [![Build Status](https://travis-ci.org/MiniProfiler/rack-mini-profiler.png)](https://travis-ci.org/MiniProfiler/rack-mini-profiler)
+[![Code Climate](https://codeclimate.com/github/MiniProfiler/rack-mini-profiler/badges/gpa.svg)](https://codeclimate.com/github/MiniProfiler/rack-mini-profiler) [![Build Status](https://travis-ci.org/MiniProfiler/rack-mini-profiler.svg)](https://travis-ci.org/MiniProfiler/rack-mini-profiler)
 
 Middleware that displays speed badge for every html page. Designed to work both in production and in development.
 
@@ -23,7 +23,6 @@ We have decided to restructure our repository so there is a central UI repo and 
 
 - Setting up a build that reuses https://github.com/MiniProfiler/ui
 - Migrating the internal data structures [per the spec](https://github.com/MiniProfiler/ui)
-- Cleaning up the [horrendous class structure that is using strings as keys and crazy non-objects](https://github.com/MiniProfiler/rack-mini-profiler/blob/master/lib/mini_profiler/sql_timer_struct.rb#L36-L44)
 
 If you feel like taking on any of this start an issue and update us on your progress.
 
@@ -98,12 +97,13 @@ Flamegraph generation is supported in MRI 2.0 and 2.1 only.
 rack-mini-profiler is designed with production profiling in mind. To enable that just run `Rack::MiniProfiler.authorize_request` once you know a request is allowed to profile.
 
 ```ruby
-# A hook in your ApplicationController
-def authorize
-  if current_user.is_admin?
-    Rack::MiniProfiler.authorize_request
+  # inside your ApplicationController
+
+  before_action do
+    if current_user && current_user.is_admin?
+      Rack::MiniProfiler.authorize_request
+    end
   end
-end
 ```
 
 ## Configuration
@@ -122,7 +122,7 @@ To disable this behavior, use the following config setting:
 
 ```ruby
 # Do not let rack-mini-profiler disable caching
-Rack::MiniProfiler.config.disable_caching = false # defaults to true 
+Rack::MiniProfiler.config.disable_caching = false # defaults to true
 ```
 
 ### Storage
@@ -180,10 +180,13 @@ The available configuration options are:
 
 * pre_authorize_cb - A lambda callback you can set to determine whether or not mini_profiler should be visible on a given request. Default in a Rails environment is only on in development mode. If in a Rack app, the default is always on.
 * position - Can either be 'right' or 'left'. Default is 'left'.
+* skip_paths - Specifies path list that can be skipped.
 * skip_schema_queries - Whether or not you want to log the queries about the schema of your tables. Default is 'false', 'true' in rails development.
 * auto_inject (default true) - when false the miniprofiler script is not injected in the page
-* backtrace_filter - a regex you can use to filter out unwanted lines from the backtraces
-* toggle_shortcut (default Alt+P) - a jquery.hotkeys.js-style keyboard shortcut, used to toggle the mini_profiler's visibility. See http://code.google.com/p/js-hotkeys/ for more info.
+* backtrace_ignores (default nil) - an array of regexes you can use to filter out unwanted lines from the backtraces
+* backtrace_includes (default nil, or [/^\/?(app|config|lib|test)/] in rails) - an array of regexes you can use to keep lines in the backtrace
+* backtrace_remove (default nil, or Rails.root in rails) - A string or regex to remove part of each line in the backtrace
+* toggle_shortcut (default Alt+P) - a jquery.hotkeys.js-style keyboard shortcut, used to toggle the mini_profiler's visibility. See https://github.com/jeresig/jquery.hotkeys for more info.
 * start_hidden (default false) - Whether or not you want the mini_profiler to be visible when loading a page
 * backtrace_threshold_ms (default zero) - Minimum SQL query elapsed time before a backtrace is recorded. Backtrace recording can take a couple of milliseconds on rubies earlier than 2.0, impacting performance for very small queries.
 * flamegraph_sample_rate (default 0.5ms) - How often fast_stack should get stack trace info to generate flamegraphs

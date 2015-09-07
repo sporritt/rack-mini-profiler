@@ -1,4 +1,24 @@
 # CHANGELOG
+
+## 0.9.7 - 2015-08-03 (Sam Saffron)
+
+- [FEATURE] remove confusing pp=profile-gc-time (Nate Berkopec)
+- [FEATURE] truncate strings in pp=analyze-memory (Nate Berkopec)
+- [FEATURE] rename pp=profile-gc-ruby-head to pp=profile-memory (Nate Berkopec)
+
+## 0.9.6 - 2015-07-08 (Sam Saffron)
+
+- [FIX] incorrect truncation in pp=analyze-memory
+
+## 0.9.5 - 2015-07-08 (Sam Saffron)
+
+- [FEATURE] improve pp=analyze-memory
+
+## 0.9.4 - 2015-07-08 (Sam Saffron)
+- [UX] added a link to "more" actions in profiler
+- [FEATURE] pp=help now displays links
+- [FEATURE] simple memory report with pp=analyze-memory
+
 ## 0.9.2 - 2014-06-26 (Sam Saffron)
 - [CHANGE] staging and other environments behave like production (Cedric Felizard)
 - [DOC] CHANGELOG reorg (Olivier Lacan)

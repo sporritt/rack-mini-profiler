@@ -54,6 +54,12 @@ describe Rack::MiniProfiler do
           [200, {'Content-Type' => 'text/html'}, '<h1>path1</h1>']
         }
       end
+      map '/rails_engine' do
+        run lambda { |env|
+          env['SCRIPT_NAME'] = '/rails_engine'  # Rails engines do that
+          [200, {'Content-Type' => 'text/html'}, '<html><h1>Hi</h1></html>']
+        }
+      end
     }.to_app
   end
 
@@ -141,6 +147,21 @@ describe Rack::MiniProfiler do
 
   end
 
+
+  describe 'within a rails engine' do
+
+    before do
+      get '/rails_engine'
+    end
+
+    it 'include the correct JS in the body' do
+      last_response.body.include?('/rails_engine/mini-profiler-resources/includes.js').should_not be_true
+      last_response.body.include?('src="/mini-profiler-resources/includes.js').should be_true
+    end
+
+  end
+
+
   describe 'configuration' do
     it "should remove caching headers by default" do
       get '/cached-resource'
@@ -157,14 +178,14 @@ describe Rack::MiniProfiler do
       before :each do
         Rack::MiniProfiler.config.disable_caching = false
       end
- 
+
       it "should strip if-modified-since on the way in" do
         old_time = 1409326086
         get '/cached-resource', {}, {'HTTP_IF_MODIFIED_SINCE' => old_time}
         last_response.status.should equal(304)
       end
 
-   
+
       it "should be able to re-enable caching" do
         get '/cached-resource'
         last_response.headers['Cache-Control'].should_not include('no-store')
@@ -202,7 +223,7 @@ describe Rack::MiniProfiler do
     it "omits db backtrace if requested" do
       get '/db?pp=no-backtrace'
       prof = load_prof(last_response)
-      stack = prof["Root"]["SqlTimings"][0]["StackTraceSnippet"]
+      stack = prof[:root][:sql_timings][0][:stack_trace_snippet]
       stack.should be_nil
     end
 
